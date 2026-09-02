@@ -1,5 +1,7 @@
 """Test attribute selectors."""
 from .. import util
+import threading
+import soupsieve as sv
 
 
 class TestAttribute(util.TestCase):
@@ -50,3 +52,44 @@ class TestAttribute(util.TestCase):
             ["div", "0", "1", "2", "3", "pre", "4", "6"],
             flags=util.HTML5
         )
+
+    def assert_bad_attribute_no_timeout(self, selector, timeout=10):
+        """Assert a bad attribute fails fast with a syntax error and does not backtrack indefinitely."""
+
+        results = []
+
+        def compile_pattern():
+            """Compile the bad selector and record the outcome."""
+
+            try:
+                sv.compile(selector)
+                results.append(None)
+            except Exception as e:
+                results.append(e)
+
+        # Compile under a bounded wait. `signal.alarm` (as used upstream) is not
+        # available on all the platforms this library supports, so use a worker
+        # thread that is simply abandoned if the pattern never comes back.
+        thread = threading.Thread(target=compile_pattern)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout)
+
+        self.assertFalse(thread.is_alive(), 'Compiling the pattern did not complete')
+        self.assertEqual(len(results), 1)
+        self.assertIsInstance(results[0], sv.SelectorSyntaxError)
+
+    def test_bad_attribute_unclused(self):
+        """Test bad attribute fails for syntax error, not timeout error."""
+
+        self.assert_bad_attribute_no_timeout('[a="' + ('x' * 300))
+
+    def test_bad_attribute_unclosed_single_quote(self):
+        """Test bad attribute with an unclosed single quoted value fails for syntax error, not timeout error."""
+
+        self.assert_bad_attribute_no_timeout("[a='" + ('x' * 300))
+
+    def test_bad_attribute_unclosed_identifier(self):
+        """Test bad attribute with an unquoted, unterminated value fails for syntax error, not timeout error."""
+
+        self.assert_bad_attribute_no_timeout('[a=' + ('x' * 300))
